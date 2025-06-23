@@ -28,7 +28,7 @@ const logger = winston.createLogger({
 const config = {
     port: process.env.SOCKETIO_PORT || 6001,
     redis: {
-        url: 'redis://127.0.0.1:6379/0'
+        url: 'redis://10.0.108.248:6379/0'
     },
     cors: {
         origin: "*",

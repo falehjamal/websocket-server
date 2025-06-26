@@ -63,7 +63,7 @@ const activeConnections = new Map();
 async function initializeRedis() {
     try {
         logger.info('🔄 Initializing Redis with URL:', config.redis.url);
-        
+
         redisSubscriber = createClient({ url: config.redis.url });
         redisPublisher = createClient({ url: config.redis.url });
 
@@ -91,13 +91,13 @@ async function initializeRedis() {
 async function setupRedisListeners() {
     try {
         logger.info('🔄 Setting up Redis pattern subscription...');
-        
+
         // Subscribe to specific pattern
         await redisSubscriber.pSubscribe('antrian.*', (message, channel) => {
             logger.info('📨 === REDIS MESSAGE RECEIVED ===');
             logger.info('📡 Channel:', channel);
             logger.info('📄 Raw message:', message);
-            
+
             try {
                 const data = JSON.parse(message);
                 logger.info('📋 Parsed data:', data);
@@ -122,7 +122,7 @@ async function setupRedisListeners() {
         });
 
         logger.info('✅ Subscribed to Redis pattern: antrian.*');
-        
+
     } catch (error) {
         logger.error('🔥 Failed to setup Redis listeners:', error);
         throw error;
@@ -167,7 +167,7 @@ io.on('connection', (socket) => {
     // Universal event listener - mendengarkan SEMUA event yang dikirim client
     socket.onAny((eventName, ...args) => {
         logger.info(`📡 Universal event received: ${eventName}`, args);
-        
+
         // Update last activity
         const connection = activeConnections.get(socket.id);
         if (connection) {
@@ -176,7 +176,7 @@ io.on('connection', (socket) => {
 
         // Broadcast ke semua client dengan event yang sama
         socket.broadcast.emit(eventName, ...args);
-        
+
         logger.info(`📢 Universal broadcast: ${eventName} to all clients`);
     });
 
@@ -220,7 +220,7 @@ io.on('connection', (socket) => {
         try {
             const { groupId } = data;
             const roomName = `group_${groupId}`;
-            
+
             socket.leave(roomName);
             socket.emit('left-group', {
                 groupId, roomName,
@@ -278,7 +278,7 @@ app.get('/status', (req, res) => {
         features: [
             'Universal Event Broadcasting',
             'Redis Integration',
-            'Group Management', 
+            'Group Management',
             'Health Monitoring',
             'Connection Tracking'
         ]
@@ -289,7 +289,7 @@ app.get('/status', (req, res) => {
 app.post('/broadcast', (req, res) => {
     try {
         const { event, data, room } = req.body;
-        
+
         if (!event || !data) {
             return res.status(400).json({ error: 'Event and data are required' });
         }
@@ -302,8 +302,8 @@ app.post('/broadcast', (req, res) => {
             logger.info(`📢 Manual broadcast to all: ${event}`);
         }
 
-        res.json({ 
-            success: true, 
+        res.json({
+            success: true,
             message: `Event ${event} broadcasted successfully`,
             timestamp: new Date().toISOString()
         });
@@ -327,7 +327,7 @@ async function startServer() {
         await initializeRedis();
 
         // Start HTTP server
-        server.listen(config.port, () => {
+        server.listen(config.port, '0.0.0.0', () => {
             logger.info(`🔥 Universal WebSocket server running on port ${config.port}`);
             logger.info(`🏥 Health check: http://localhost:${config.port}/health`);
             logger.info(`📊 Status check: http://localhost:${config.port}/status`);
@@ -343,10 +343,10 @@ async function startServer() {
 // Graceful shutdown
 process.on('SIGTERM', async () => {
     logger.info('🛑 SIGTERM received, shutting down gracefully');
-    
+
     if (redisSubscriber) await redisSubscriber.quit();
     if (redisPublisher) await redisPublisher.quit();
-    
+
     server.close(() => {
         logger.info('✅ Server shut down successfully');
         process.exit(0);
@@ -355,10 +355,10 @@ process.on('SIGTERM', async () => {
 
 process.on('SIGINT', async () => {
     logger.info('🛑 SIGINT received, shutting down gracefully');
-    
+
     if (redisSubscriber) await redisSubscriber.quit();
     if (redisPublisher) await redisPublisher.quit();
-    
+
     server.close(() => {
         logger.info('✅ Server shut down successfully');
         process.exit(0);

@@ -138,3 +138,4 @@ dump.rdb
 # Local development
 .local
 .cache 
+logs

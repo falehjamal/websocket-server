@@ -92,9 +92,9 @@ async function setupRedisListeners() {
     try {
         logger.info('🔄 Setting up Redis pattern subscription...');
 
-        // Subscribe to specific pattern
+        // Subscribe to antrian pattern
         await redisSubscriber.pSubscribe('antrian.*', (message, channel) => {
-            logger.info('📨 === REDIS MESSAGE RECEIVED ===');
+            logger.info('📨 === REDIS MESSAGE RECEIVED (ANTRIAN) ===');
             logger.info('📡 Channel:', channel);
             logger.info('📄 Raw message:', message);
 
@@ -117,11 +117,43 @@ async function setupRedisListeners() {
                 broadcastToClients(channel, data.event, data.data, groupId);
 
             } catch (error) {
-                logger.error('❌ Error processing message:', error);
+                logger.error('❌ Error processing antrian message:', error);
             }
         });
 
-        logger.info('✅ Subscribed to Redis pattern: antrian.*');
+        // Subscribe to all channels for prescription events
+        await redisSubscriber.pSubscribe('*', (message, channel) => {
+            logger.info('📨 === REDIS MESSAGE RECEIVED (ALL) ===');
+            logger.info('📡 Channel:', channel);
+            logger.info('📄 Raw message:', message);
+
+            try {
+                const data = JSON.parse(message);
+                logger.info('📋 Parsed data:', data);
+
+                if (!data.event || !data.data) {
+                    logger.warn('⚠️ Invalid message format:', data);
+                    return;
+                }
+
+                const event = data.event;
+
+                // Handle prescription events
+                if (event.startsWith('prescription.')) {
+                    logger.info('💊 Prescription event detected:', event);
+                    broadcastToPrescriptionRoom(channel, event, data.data);
+                } else if (!channel.startsWith('antrian.')) {
+                    // Handle other non-antrian events to all clients
+                    logger.info('📢 Broadcasting general event to all clients:', event);
+                    io.emit(`${channel}:${event}`, data.data);
+                }
+
+            } catch (error) {
+                logger.error('❌ Error processing general message:', error);
+            }
+        });
+
+        logger.info('✅ Subscribed to Redis patterns: antrian.* and *');
 
     } catch (error) {
         logger.error('🔥 Failed to setup Redis listeners:', error);
@@ -150,6 +182,25 @@ function broadcastToClients(channel, event, data, groupId) {
 
     logger.info(`✅ Broadcasted ${event} to ${clientCount} clients`, {
         channel, event, groupId, clientCount, roomName
+    });
+}
+
+function broadcastToPrescriptionRoom(channel, event, data) {
+    const roomName = 'prescription';
+    const clientCount = io.sockets.adapter.rooms.get(roomName)?.size || 0;
+
+    logger.info(`💊 Prescription Room: ${roomName} (${clientCount} clients)`);
+
+    if (clientCount === 0) {
+        logger.warn(`⚠️ No clients in prescription room`);
+        return;
+    }
+
+    logger.info(`📡 Emitting prescription "${event}" to room "${roomName}"`);
+    io.to(roomName).emit(`${channel}:${event}`, data);
+
+    logger.info(`✅ Broadcasted prescription ${event} to ${clientCount} clients`, {
+        channel, event, clientCount, roomName
     });
 }
 
@@ -235,6 +286,50 @@ io.on('connection', (socket) => {
         }
     });
 
+    // Handler untuk join prescription room
+    socket.on('join-prescription', () => {
+        try {
+            const roomName = 'prescription';
+            
+            socket.join(roomName);
+            
+            socket.emit('prescription-joined', { 
+                message: 'Successfully joined prescription room',
+                socketId: socket.id,
+                roomName,
+                timestamp: new Date().toISOString()
+            });
+
+            logger.info(`💊 Client ${socket.id} joined prescription room`);
+
+        } catch (error) {
+            logger.error('❌ Error handling join-prescription:', error);
+            socket.emit('error', { message: 'Failed to join prescription room' });
+        }
+    });
+
+    // Handler untuk leave prescription room
+    socket.on('leave-prescription', () => {
+        try {
+            const roomName = 'prescription';
+            
+            socket.leave(roomName);
+            
+            socket.emit('prescription-left', { 
+                message: 'Successfully left prescription room',
+                socketId: socket.id,
+                roomName,
+                timestamp: new Date().toISOString()
+            });
+
+            logger.info(`💊 Client ${socket.id} left prescription room`);
+
+        } catch (error) {
+            logger.error('❌ Error handling leave-prescription:', error);
+            socket.emit('error', { message: 'Failed to leave prescription room' });
+        }
+    });
+
     // Handler untuk disconnect
     socket.on('disconnect', (reason) => {
         logger.info(`❌ Client disconnected: ${socket.id}`, { reason });
@@ -250,6 +345,11 @@ io.on('connection', (socket) => {
 // Health endpoint
 app.get('/health', (req, res) => {
     const connections = Array.from(activeConnections.values());
+    const allRooms = Array.from(io.sockets.adapter.rooms.keys());
+    const groupRooms = allRooms.filter(room => room.startsWith('group_'));
+    const prescriptionRoom = allRooms.find(room => room === 'prescription');
+    const prescriptionClients = prescriptionRoom ? io.sockets.adapter.rooms.get('prescription')?.size || 0 : 0;
+
     res.json({
         status: 'ok',
         timestamp: new Date().toISOString(),
@@ -266,7 +366,14 @@ app.get('/health', (req, res) => {
             subscriber: redisSubscriber?.isReady || false,
             publisher: redisPublisher?.isReady || false
         },
-        rooms: Array.from(io.sockets.adapter.rooms.keys()).filter(room => room.startsWith('group_'))
+        rooms: {
+            groups: groupRooms,
+            prescription: {
+                exists: !!prescriptionRoom,
+                clients: prescriptionClients
+            },
+            total: allRooms.length
+        }
     });
 });
 
@@ -279,6 +386,7 @@ app.get('/status', (req, res) => {
             'Universal Event Broadcasting',
             'Redis Integration',
             'Group Management',
+            'Prescription Room Management',
             'Health Monitoring',
             'Connection Tracking'
         ]
@@ -295,8 +403,14 @@ app.post('/broadcast', (req, res) => {
         }
 
         if (room) {
-            io.to(room).emit(event, data);
-            logger.info(`📡 Manual broadcast to room ${room}: ${event}`);
+            // Support untuk prescription room
+            if (room === 'prescription') {
+                io.to('prescription').emit(event, data);
+                logger.info(`💊 Manual broadcast to prescription room: ${event}`);
+            } else {
+                io.to(room).emit(event, data);
+                logger.info(`📡 Manual broadcast to room ${room}: ${event}`);
+            }
         } else {
             io.emit(event, data);
             logger.info(`📢 Manual broadcast to all: ${event}`);
@@ -305,6 +419,7 @@ app.post('/broadcast', (req, res) => {
         res.json({
             success: true,
             message: `Event ${event} broadcasted successfully`,
+            target: room || 'all clients',
             timestamp: new Date().toISOString()
         });
 

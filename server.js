@@ -48,6 +48,7 @@ const io = new Server(server, {
 // Redis clients
 let redisSubscriber, redisPublisher;
 const activeConnections = new Map();
+const groupPermalinks = new Map(); // Store permalinks for each group
 
 // Utility functions
 const extractGroupIdFromChannel = (channel) => {
@@ -213,6 +214,16 @@ const handleJoinGroup = (socket, data) => {
 
         const roomName = `group_${groupId}`;
 
+        // Store the permalink (groupName) for this group
+        if (groupName) {
+            // Ensure groupId is always stored as string for consistency
+            const groupIdStr = String(groupId);
+            groupPermalinks.set(groupIdStr, groupName);
+            logger.info(`💾 Stored permalink for group ${groupIdStr}: "${groupName}"`);
+        } else {
+            logger.warn(`⚠️ No groupName provided for group ${groupId}`);
+        }
+
         // Leave previous group rooms
         socket.rooms.forEach(room => {
             if (room !== socket.id && room.startsWith('group_')) {
@@ -241,6 +252,15 @@ const handleLeaveGroup = (socket, data) => {
         const roomName = `group_${groupId}`;
 
         socket.leave(roomName);
+        
+        // Check if no more clients in this group, then remove permalink
+        const remainingClients = getRoomClientCount(roomName);
+        if (remainingClients === 0) {
+            const groupIdStr = String(groupId);
+            groupPermalinks.delete(groupIdStr);
+            logger.info(`🗑️ Removed permalink for group ${groupIdStr} (no more clients)`);
+        }
+        
         socket.emit('left-group', {
             groupId, roomName,
             timestamp: createTimestamp()
@@ -321,6 +341,21 @@ io.on('connection', (socket) => {
     
     socket.on('disconnect', (reason) => {
         logger.info(`❌ Client disconnected: ${socket.id}`, { reason });
+        
+        // Clean up permalinks for empty groups
+        const allRooms = Array.from(io.sockets.adapter.rooms.keys());
+        const groupRooms = allRooms.filter(room => room.startsWith('group_'));
+        
+        groupRooms.forEach(roomName => {
+            const groupId = roomName.replace('group_', '');
+            const clientCount = getRoomClientCount(roomName);
+            if (clientCount === 0) {
+                const groupIdStr = String(groupId);
+                groupPermalinks.delete(groupIdStr);
+                logger.info(`🗑️ Cleaned up permalink for empty group ${groupIdStr}`);
+            }
+        });
+        
         activeConnections.delete(socket.id);
     });
 
@@ -411,6 +446,61 @@ app.post('/broadcast', (req, res) => {
     }
 });
 
+app.get('/displays/active', (req, res) => {
+    try {
+        const allRooms = Array.from(io.sockets.adapter.rooms.keys());
+        const groupRooms = allRooms.filter(room => room.startsWith('group_'));
+        
+        const activeDisplays = groupRooms.map(roomName => {
+            const groupId = roomName.replace('group_', '');
+            const clientCount = getRoomClientCount(roomName);
+            const clients = Array.from(io.sockets.adapter.rooms.get(roomName) || []);
+            
+            // Get client details for this room
+            const clientDetails = clients.map(socketId => {
+                const connection = activeConnections.get(socketId);
+                return {
+                    socketId,
+                    connectedAt: connection?.connectedAt,
+                    lastActivity: connection?.lastActivity,
+                    ipAddress: connection?.ipAddress
+                };
+            }).filter(Boolean);
+
+            // Get the actual permalink from stored data, fallback to default format
+            const storedPermalink = groupPermalinks.get(groupId);
+            const actualPermalink = storedPermalink || `/display/group/${groupId}`;
+
+            return {
+                groupNumber: parseInt(groupId),
+                permalink: actualPermalink,
+                roomName,
+                clientCount,
+                clients: clientDetails,
+                isActive: clientCount > 0,
+                lastUpdated: createTimestamp()
+            };
+        }).filter(display => display.isActive); // Only return active displays
+
+        // Sort by group number
+        activeDisplays.sort((a, b) => a.groupNumber - b.groupNumber);
+
+        res.json({
+            success: true,
+            totalActiveDisplays: activeDisplays.length,
+            displays: activeDisplays,
+            timestamp: createTimestamp()
+        });
+
+    } catch (error) {
+        logger.error('❌ Error getting active displays:', error);
+        res.status(500).json({ 
+            error: 'Failed to get active displays',
+            message: error.message 
+        });
+    }
+});
+
 // Server startup and shutdown
 const startServer = async () => {
     try {
@@ -426,6 +516,7 @@ const startServer = async () => {
             logger.info(`🏥 Health check: http://localhost:${config.port}/health`);
             logger.info(`📊 Status check: http://localhost:${config.port}/status`);
             logger.info(`📡 Manual broadcast: POST http://localhost:${config.port}/broadcast`);
+            logger.info(`🖥️ Active displays: GET http://localhost:${config.port}/displays/active`);
         });
 
     } catch (error) {

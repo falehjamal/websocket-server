@@ -56,13 +56,6 @@ const extractGroupIdFromChannel = (channel) => {
     return match ? match[1] : null;
 };
 
-const updateClientActivity = (socketId) => {
-    const connection = activeConnections.get(socketId);
-    if (connection) {
-        connection.lastActivity = new Date().toISOString();
-    }
-};
-
 const getRoomClientCount = (roomName) => {
     return io.sockets.adapter.rooms.get(roomName)?.size || 0;
 };
@@ -321,16 +314,7 @@ io.on('connection', (socket) => {
     activeConnections.set(socket.id, {
         id: socket.id,
         connectedAt: createTimestamp(),
-        lastActivity: createTimestamp(),
         ipAddress: socket.handshake.address
-    });
-
-    // Universal event listener
-    socket.onAny((eventName, ...args) => {
-        logger.info(`📡 Universal event received: ${eventName}`, args);
-        updateClientActivity(socket.id);
-        socket.broadcast.emit(eventName, ...args);
-        logger.info(`📢 Universal broadcast: ${eventName} to all clients`);
     });
 
     // Event handlers
@@ -365,86 +349,6 @@ io.on('connection', (socket) => {
 });
 
 // API Routes
-app.get('/health', (req, res) => {
-    const connections = Array.from(activeConnections.values());
-    const allRooms = Array.from(io.sockets.adapter.rooms.keys());
-    const groupRooms = allRooms.filter(room => room.startsWith('group_'));
-    const prescriptionRoom = allRooms.find(room => room === 'prescription');
-    const prescriptionClients = prescriptionRoom ? getRoomClientCount('prescription') : 0;
-
-    res.json({
-        status: 'ok',
-        timestamp: createTimestamp(),
-        server: {
-            port: config.port,
-            uptime: process.uptime()
-        },
-        connections: {
-            total: connections.length,
-            active: connections.length,
-            details: connections
-        },
-        redis: {
-            subscriber: redisSubscriber?.isReady || false,
-            publisher: redisPublisher?.isReady || false
-        },
-        rooms: {
-            groups: groupRooms,
-            prescription: {
-                exists: !!prescriptionRoom,
-                clients: prescriptionClients
-            },
-            total: allRooms.length
-        }
-    });
-});
-
-app.get('/status', (req, res) => {
-    res.json({
-        status: 'running',
-        version: '1.0.0',
-        features: [
-            'Universal Event Broadcasting',
-            'Redis Integration',
-            'Group Management',
-            'Prescription Room Management',
-            'Health Monitoring',
-            'Connection Tracking'
-        ]
-    });
-});
-
-app.post('/broadcast', (req, res) => {
-    try {
-        const { event, data, room } = req.body;
-
-        if (!event || !data) {
-            return res.status(400).json({ error: 'Event and data are required' });
-        }
-
-        if (room) {
-            io.to(room).emit(event, data);
-            logger.info(`📡 Manual broadcast to room ${room}: ${event}`);
-            if (room === 'prescription') {
-                logger.info(`💊 Manual broadcast to prescription room: ${event}`);
-            }
-        } else {
-            io.emit(event, data);
-            logger.info(`📢 Manual broadcast to all: ${event}`);
-        }
-
-        res.json({
-            success: true,
-            message: `Event ${event} broadcasted successfully`,
-            target: room || 'all clients',
-            timestamp: createTimestamp()
-        });
-
-    } catch (error) {
-        logger.error('❌ Error in manual broadcast:', error);
-        res.status(500).json({ error: 'Failed to broadcast message' });
-    }
-});
 
 app.get('/displays/active', (req, res) => {
     try {
@@ -462,7 +366,6 @@ app.get('/displays/active', (req, res) => {
                 return {
                     socketId,
                     connectedAt: connection?.connectedAt,
-                    lastActivity: connection?.lastActivity,
                     ipAddress: connection?.ipAddress
                 };
             }).filter(Boolean);
@@ -513,9 +416,6 @@ const startServer = async () => {
 
         server.listen(config.port, '0.0.0.0', () => {
             logger.info(`🔥 Universal WebSocket server running on port ${config.port}`);
-            logger.info(`🏥 Health check: http://localhost:${config.port}/health`);
-            logger.info(`📊 Status check: http://localhost:${config.port}/status`);
-            logger.info(`📡 Manual broadcast: POST http://localhost:${config.port}/broadcast`);
             logger.info(`🖥️ Active displays: GET http://localhost:${config.port}/displays/active`);
         });
 
